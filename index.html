@@ -714,11 +714,22 @@ async function unlock(pass){
   var r=await fetch('data/vault.json',{cache:'no-store'});
   if(!r.ok)throw new Error('vault');
   var repo=await r.json(),cache=readCache();
-  var vault=(cache&&(cache.updated||'')>(repo.updated||''))?cache:repo;
-  var key=await deriveKey(pass,unb64(vault.salt),vault.iter);
-  var pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(vault.iv)},key,unb64(vault.ct));
-  var data=JSON.parse(new TextDecoder().decode(pt));
-  LK={key:key,vault:vault,data:data,dirty:vault===cache};
+  // Önce bu tarayıcıdaki (daha yeni) kayıt denenir; çözülemezse repodaki dosya denenir
+  var cands=[];
+  if(cache&&(cache.updated||'')>(repo.updated||''))cands.push({v:cache,isCache:true});
+  cands.push({v:repo,isCache:false});
+  if(cache&&!cands[0].isCache)cands.push({v:cache,isCache:true});
+  for(var i=0;i<cands.length;i++){
+    var vault=cands[i].v;
+    try{
+      var key=await deriveKey(pass,unb64(vault.salt),vault.iter);
+      var pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(vault.iv)},key,unb64(vault.ct));
+      var data=JSON.parse(new TextDecoder().decode(pt));
+      LK={key:key,vault:vault,data:data,dirty:cands[i].isCache};
+      return;
+    }catch(err){}
+  }
+  throw new Error('pass');
 }
 function syncS(){
   var d=LK.data;
