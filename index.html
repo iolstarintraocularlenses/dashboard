@@ -404,7 +404,7 @@ function viewSiparis(){
   h+='<div class="tw"><table><thead><tr><th>Müşteri</th><th>Kalemler</th><th class="r">Adet</th><th>İstenen teslim</th><th>Öncelik</th><th>Durum</th>'+(fin?'<th class="r">Tutar</th>':'')+'<th></th></tr></thead><tbody id="ordBody">';
   L.forEach(function(o){
     var items=(o.items||[]);
-    h+='<tr data-q="'+esc((o.customer||'').toLowerCase())+'"><td><b>'+esc(o.customer||'—')+'</b><div class="sub">'+esc([o.country,fmtD(o.orderDate)].filter(Boolean).join(' · '))+(o.source?' · '+esc(o.source):'')+'</div></td>'+
+    h+='<tr data-q="'+esc((o.customer||'').toLowerCase())+'"><td><b>'+esc(o.customer||'—')+'</b><div class="sub">'+esc([o.ref?'No '+o.ref:'',o.country,fmtD(o.orderDate)].filter(Boolean).join(' · '))+(o.source?' · '+esc(o.source):'')+'</div>'+(o.note?'<div class="pill warn" style="white-space:normal;margin-top:6px;text-align:left">'+esc(o.note)+'</div>':'')+'</td>'+
       '<td class="small">'+items.slice(0,3).map(function(it){return esc(itemText(it))}).join('<br>')+(items.length>3?'<br><span class="muted">+'+(items.length-3)+' kalem daha</span>':'')+'</td>'+
       '<td class="r num">'+nf.format(totalQty(o))+(gramsOf(o)?'<div class="sub">'+nf.format(gramsOf(o))+' g</div>':'')+'</td><td class="num">'+fmtD(o.requestedDate)+'</td>'+
       '<td>'+(ed?'<select data-act="prio" data-id="'+esc(o.id)+'" aria-label="Öncelik">'+PRIO.map(function(p){return '<option value="'+p[0]+'"'+((o.priority||'normal')===p[0]?' selected':'')+'>'+p[1]+'</option>'}).join('')+'</select>':esc(o.priority||'normal'))+'</td>'+
@@ -534,12 +534,13 @@ function orderForm(id){
   var rows=(o.items||[]).map(function(it){return itemRow(it)}).join('');
   openModal('<h2>'+(id?'Siparişi düzenle':'Yeni sipariş')+'</h2><form data-form="order" data-id="'+esc(id||'')+'"><div class="fg">'+
     '<label class="f">Müşteri<input name="customer" required value="'+esc(o.customer||'')+'"></label><label class="f">Ülke / şehir<input name="country" value="'+esc(o.country||'')+'"></label>'+
+    '<label class="f">Müşteri sipariş no<input name="ref" placeholder="Örn: 070/2026" value="'+esc(o.ref||'')+'"></label>'+
     '<label class="f">Sipariş tarihi<input type="date" name="orderDate" value="'+esc(o.orderDate||'')+'"></label><label class="f">İstenen teslim<input type="date" name="requestedDate" value="'+esc(o.requestedDate||'')+'"></label>'+
     '<label class="f">Öncelik<select name="priority">'+opts(PRIO,o.priority||'normal')+'</select></label><label class="f">Durum<select name="status">'+opts(STATUS.map(function(s){return [s[0],s[1]]}),o.status)+'</select></label>'+
     '<label class="f">Sipariş tutarı<input type="number" min="0" step="any" name="amount" value="'+esc(o.amount||'')+'"></label><label class="f">Para birimi<select name="currency">'+opts(CURS.map(function(c){return [c,c]}),o.currency||'EUR')+'</select></label>'+
     '<label class="f">Üretilen adet (devam eden)<input type="number" min="0" name="doneQty" value="'+esc(o.doneQty||'')+'"></label><label class="f">Kaynak (Gmail konusu)<input name="source" value="'+esc(o.source||'')+'"></label></div>'+
     '<h3 style="margin:16px 0 8px">Kalemler</h3><p class="small muted" style="margin:0 0 10px">Hammaddede adet yerine gram yazın; hammadde üretim kapasitesinden düşülmez.</p><div id="irows">'+rows+'</div><button type="button" class="btn sm" data-act="add-row">Kalem ekle</button>'+
-    '<label class="f" style="margin-top:12px">Not<textarea name="note">'+esc(o.note||'')+'</textarea></label>'+
+    '<label class="f" style="margin-top:12px">Açıklama (özel koşul)<textarea name="note" rows="3" placeholder="Örn: %5 mal fazlası gönderilecek (73 adet); sevk tek partide yapılacak">'+esc(o.note||'')+'</textarea></label>'+
     '<div class="row sb" style="margin-top:14px"><div class="row">'+(id?'<button type="button" class="btn danger" data-act="del-order" data-id="'+esc(id)+'">Siparişi sil</button>':'')+'</div><div class="row"><button type="button" class="btn" data-act="mclose">Vazgeç</button><button type="submit" class="btn p">Kaydet</button></div></div></form>');
 }
 function invForm(id){
@@ -662,7 +663,7 @@ document.addEventListener('submit',function(e){
       return {model:mid,color:c?c.value:'',cyl:cy?cy.value:'',power:dp?dp.value:'',qty:Math.max(0,Math.round(+r.querySelector('.iqty').value||0))};
     }).filter(function(i){return i.model&&i.qty>0});
     if(!items.length){toast('En az bir kalem, model ve adet/gram girin.',true);return}
-    var d={customer:g('customer'),country:g('country'),orderDate:g('orderDate'),requestedDate:g('requestedDate'),priority:g('priority'),status:g('status'),amount:+g('amount')||0,currency:g('currency'),doneQty:+g('doneQty')||0,source:g('source'),note:g('note'),items:items};
+    var d={customer:g('customer'),country:g('country'),orderDate:g('orderDate'),requestedDate:g('requestedDate'),priority:g('priority'),status:g('status'),amount:+g('amount')||0,currency:g('currency'),doneQty:+g('doneQty')||0,source:g('source'),ref:g('ref'),note:g('note'),items:items};
     save(async function(){if(id)await S.db.doc('orders/'+id).set(d);else await S.db.collection('orders').add(d);closeModal()},'Sipariş kaydedildi')}
   else if(k==='inv'){
     var v={no:g('no'),customer:g('customer'),orderId:g('orderId'),amount:+g('amount')||0,currency:g('currency'),issueDate:g('issueDate'),dueDate:g('dueDate'),paid:+g('paid')||0,paidDate:g('paidDate'),source:g('source')};
