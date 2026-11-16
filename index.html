@@ -323,7 +323,7 @@ function computePerms(){
   return new Set(['dash','prod_view','ord_view','plan_view','fin_view']);
 }
 function roleOf(){return S.isOwner?'Yönetici':'Görüntüleyici'}
-var TABS=[['ozet','Özet','dash'],['siparis','Siparişler','ord_view'],['plan','Üretim Planı','plan_view'],['kapasite','Kapasite','plan_view'],['urun','Ürün ve Stok','prod_view'],['gelir','Gelir ve Faturalar','fin_view'],['kullanici','Kullanıcılar','#owner']];
+var TABS=[['ozet','Özet','dash'],['siparis','Siparişler','ord_view'],['plan','Üretim Planı','plan_view'],['kapasite','Kapasite','plan_view'],['urun','Ürün ve Stok','prod_view'],['gelir','Gelir ve Faturalar','fin_view']];
 function allowedTabs(){return TABS.filter(function(t){return t[2]==='#owner'?S.isOwner:P.has(t[2])})}
 function curTab(){var h=(location.hash||'').replace('#','');var a=allowedTabs();var f=a.filter(function(t){return t[0]===h})[0];return f?f[0]:(a[0]?a[0][0]:'')}
 
@@ -470,33 +470,6 @@ function viewGelir(){
   return h+'</tbody></table></div></div>';
 }
 
-function viewKullanici(){
-  var opt=function(v,l,cur){return '<option value="'+v+'"'+(cur===v?' selected':'')+'>'+l+'</option>'};
-  var h='<div class="stack"><div class="sect-h"><div><h2>Kullanıcılar</h2><p>Hesap açın, rol atayın ve şifre sıfırlayın. Görüntüleyici yalnızca okur; yönetici her şeyi düzenler.</p></div></div>';
-  h+='<section class="card"><h3>Yeni kullanıcı</h3><form data-form="newuser"><div class="fg">'+
-    '<label>E-posta<input name="email" type="email" required></label>'+
-    '<label>Geçici şifre (en az 10 karakter)<input name="password" type="text" minlength="10" required></label>'+
-    '<label>Rol<select name="role">'+opt('viewer','Görüntüleyici','viewer')+opt('admin','Yönetici','viewer')+'</select></label></div>'+
-    '<div class="row" style="margin-top:10px"><button class="btn p" type="submit">Hesap oluştur</button></div></form></section>';
-  var users=S.users||[];
-  if(!users.length)h+='<div class="empty"><p>Henüz kullanıcı yok.</p></div>';
-  users.forEach(function(u){
-    var isMe=u.id===S.uid;
-    h+='<section class="card"><div class="row sb"><div><b>'+esc(u.email||'—')+'</b>'+(isMe?' <span class="pill">Siz</span>':'')+' '+
-      (u.active?'<span class="pill ok">Aktif</span>':'<span class="pill bad">Pasif</span>')+' <span class="pill">'+(u.role==='admin'?'Yönetici':'Görüntüleyici')+'</span></div></div>'+
-      '<form data-form="profile" data-id="'+esc(u.id)+'"><div class="row" style="margin-top:8px">'+
-      '<label class="f" style="flex-direction:row;align-items:center;gap:8px">Rol <select name="role">'+opt('viewer','Görüntüleyici',u.role)+opt('admin','Yönetici',u.role)+'</select></label>'+
-      '<label class="ck"><input type="checkbox" name="active"'+(u.active||isMe?' checked':'')+(isMe?' disabled':'')+'>Hesap etkin</label>'+
-      '<button class="btn" type="submit">Kaydet</button></div></form>'+
-      '<form data-form="resetpw" data-id="'+esc(u.id)+'" style="margin-top:8px"><div class="row">'+
-      '<input name="password" type="text" minlength="10" placeholder="Yeni şifre (en az 10 karakter)" required style="flex:1;min-width:180px">'+
-      '<button class="btn" type="submit">Şifreyi sıfırla</button></div></form>'+
-      (isMe?'':'<div class="row" style="margin-top:8px"><button class="btn danger" type="button" data-act="del-user" data-id="'+esc(u.id)+'">Hesabı sil</button></div>')+
-      '</section>';
-  });
-  return h+'</div>';
-}
-
 /* ---------- shell ---------- */
 function topbar(tab){
   var me=S.me||{},tabs=allowedTabs();
@@ -525,7 +498,7 @@ function render(){
     app.innerHTML='<div class="center"><div><h2>Erişim bekleniyor</h2><p class="muted">Henüz bu panelde görüntüleme yetkiniz yok. '+(asked?'İsteğiniz panelin sahibine iletildi; yetki verildiğinde sayfa kendiliğinden açılır.':'Yetki istemek için aşağıdaki düğmeye basın.')+'</p>'+(asked?'':'<button class="btn p" data-act="request-access">Erişim iste</button>')+(S.err?'<p class="small muted">Veri okunamadı: '+esc(S.err)+'</p>':'')+'</div></div>';
     return;
   }
-  var v={ozet:viewOzet,siparis:viewSiparis,plan:viewPlan,kapasite:viewKapasite,urun:viewUrun,gelir:viewGelir,kullanici:viewKullanici}[tab]();
+  var v={ozet:viewOzet,siparis:viewSiparis,plan:viewPlan,kapasite:viewKapasite,urun:viewUrun,gelir:viewGelir}[tab]();
   app.innerHTML=v;
 }
 
@@ -739,16 +712,7 @@ async function loadTable(t){
   var r=await sb.from(t).select('id,data');if(r.error)throw r.error;
   var o={};r.data.forEach(function(row){o[row.id]=row.data});DB[t]=o;
 }
-async function refreshUsers(){
-  if(!S.isOwner)return;
-  var r=await sb.from('profiles').select('id,email,role,active').order('email');
-  if(r.error)throw r.error;S.users=r.data||[];schedule();
-}
-async function loadAll(){
-  await Promise.all(TABLES.map(loadTable));
-  await refreshUsers();
-  syncS();
-}
+async function loadAll(){await Promise.all(TABLES.map(loadTable));syncS()}
 // Eski veritabanı arayüzüyle aynı çağrılar, Supabase tabloları üzerinde
 function mkDb(){
   async function up(t,id,data){
@@ -770,44 +734,26 @@ function mkDb(){
     }
   };
 }
-async function callAdmin(body){
-  var r=await sb.functions.invoke('admin-users',{body:body});
-  if(r.error){
-    var m='İşlem tamamlanamadı.';
-    try{var j=await r.error.context.json();if(j&&j.error)m=j.error}catch(x){}
-    throw new Error(m);
-  }
-  if(r.data&&r.data.error)throw new Error(r.data.error);
-  return r.data;
-}
 async function run(fn,ok){
   try{await fn();if(ok)toast(ok);return true}
   catch(e){toast((e&&e.message)||'İşlem tamamlanamadı.',true);return false}
 }
 function loginHTML(){
   return '<div class="center"><form id="login-form" class="card" style="width:100%;max-width:360px;text-align:left">'+
-    '<h2 style="margin:0 0 4px">Giriş</h2><p class="muted" style="margin:0 0 14px">IOLSTAR paneline e-posta ve şifrenizle girin.</p>'+
-    '<div class="fg"><label>E-posta<input name="email" type="email" autocomplete="username" required></label>'+
-    '<label>Şifre<input name="pass" type="password" autocomplete="current-password" required></label></div>'+
+    '<h2 style="margin:0 0 4px">Giriş</h2><p class="muted" style="margin:0 0 14px">Panel şifrenizi girin.</p>'+
+    '<div class="fg"><label>Şifre<input name="pass" type="password" autocomplete="current-password" required autofocus></label></div>'+
     '<p id="login-err" style="color:var(--bad,#b42318);min-height:1.2em;margin:8px 0"></p>'+
     '<button class="btn p" type="submit" style="width:100%">Giriş yap</button></form></div>';
 }
 function showLogin(msg){
-  S.db=null;S.isOwner=false;S.me=null;S.uid=null;S.users=[];
+  S.db=null;S.isOwner=false;S.me=null;S.uid=null;
   render();
   var e=$('#login-err');if(e&&msg)e.textContent=msg;
 }
-async function enterWithSession(){
+async function enterSession(){
   var s=await sb.auth.getSession();
   if(!s.data||!s.data.session){showLogin('');return}
-  var u=s.data.session.user;
-  var p=await sb.from('profiles').select('role,active,email').eq('id',u.id).single();
-  if(p.error||!p.data||!p.data.active){
-    await sb.auth.signOut();
-    showLogin('Hesabınız henüz onaylanmadı. Yönetici ile iletişime geçin.');
-    return;
-  }
-  S.uid=u.id;S.isOwner=p.data.role==='admin';S.me={name:p.data.email||u.email};
+  S.uid=s.data.session.user.id;S.isOwner=true;S.me={name:'Yönetici'};
   S.db=mkDb();
   try{await loadAll()}catch(err){
     await sb.auth.signOut();
@@ -819,56 +765,27 @@ async function enterWithSession(){
 document.addEventListener('submit',async function(e){
   var f=e.target.closest&&e.target.closest('#login-form');if(!f)return;e.preventDefault();
   var b=f.querySelector('button');if(b)b.disabled=true;
-  var r=await sb.auth.signInWithPassword({email:f.elements.email.value.trim(),password:f.elements.pass.value});
-  if(r.error){if(b)b.disabled=false;showLogin('E-posta veya şifre hatalı.');return}
-  await enterWithSession();
+  var r=await sb.auth.signInWithPassword({email:CFG.loginEmail,password:f.elements.pass.value});
+  if(r.error){if(b)b.disabled=false;showLogin('Şifre hatalı.');return}
+  await enterSession();
 });
 document.addEventListener('submit',async function(e){
-  var f=e.target.closest&&e.target.closest('form[data-form]');if(!f)return;
-  var k=f.dataset.form;
-  if(['newuser','profile','resetpw','ownpw'].indexOf(k)<0)return;
-  e.preventDefault();
-  var fd=new FormData(f),g=function(n){return (fd.get(n)||'').toString().trim()};
-  var ok=false;
-  if(k==='newuser'){
-    ok=await run(function(){return callAdmin({action:'create',email:g('email'),password:g('password'),role:g('role')})},'Hesap oluşturuldu');
-    if(ok){f.reset();await refreshUsers()}
-  }
-  else if(k==='profile'){
-    var id=f.dataset.id,isMe=id===S.uid;
-    ok=await run(async function(){
-      var r=await sb.from('profiles').update({role:g('role'),active:isMe?true:fd.get('active')!==null}).eq('id',id);
-      if(r.error)throw r.error;
-    },'Kullanıcı güncellendi');
-    if(ok)await refreshUsers();
-  }
-  else if(k==='resetpw'){
-    ok=await run(function(){return callAdmin({action:'reset',userId:f.dataset.id,password:g('password')})},'Şifre sıfırlandı');
-    if(ok)f.reset();
-  }
-  else if(k==='ownpw'){
-    ok=await run(async function(){
-      var r=await sb.auth.updateUser({password:g('password')});if(r.error)throw r.error;
-      closeModal();
-    },'Şifreniz değiştirildi');
-  }
+  var f=e.target.closest&&e.target.closest('form[data-form="ownpw"]');if(!f)return;e.preventDefault();
+  var pw=(new FormData(f).get('password')||'').toString();
+  await run(async function(){
+    var r=await sb.auth.updateUser({password:pw});if(r.error)throw r.error;
+    closeModal();
+  },'Şifreniz değiştirildi');
 });
 document.addEventListener('click',async function(e){
-  var el=e.target.closest('[data-act="logout"],[data-act="own-pw"],[data-act="del-user"]');if(!el)return;
+  var el=e.target.closest('[data-act="logout"],[data-act="own-pw"]');if(!el)return;
   var a=el.dataset.act;
   if(a==='logout'){await sb.auth.signOut();location.hash='';showLogin('');return}
-  if(a==='own-pw'){
-    openModal('<h2>Şifremi değiştir</h2><form data-form="ownpw"><div class="fg"><label>Yeni şifre (en az 10 karakter)<input name="password" type="password" minlength="10" required></label></div><div class="row" style="margin-top:12px"><button class="btn p" type="submit">Kaydet</button></div></form>');
-    return;
-  }
-  if(a==='del-user'){
-    if(!el.dataset.arm){el.dataset.arm='1';el.textContent='Silmek için tekrar basın';return}
-    if(await run(function(){return callAdmin({action:'delete',userId:el.dataset.id})},'Hesap silindi'))await refreshUsers();
-  }
+  openModal('<h2>Şifremi değiştir</h2><form data-form="ownpw"><div class="fg"><label>Yeni şifre (en az 10 karakter)<input name="password" type="password" minlength="10" required></label></div><div class="row" style="margin-top:12px"><button class="btn p" type="submit">Kaydet</button></div></form>');
 });
 async function boot(){
-  if(!sb){showLogin('Bağlantı ayarları eksik (config.js).');return}
-  await enterWithSession();
+  if(!sb||!CFG.loginEmail){showLogin('Bağlantı ayarları eksik (config.js).');return}
+  await enterSession();
 }
 boot();
 
