@@ -179,7 +179,7 @@ var PRIO=[['acil','Acil'],['normal','Normal'],['düşük','Düşük']];
 var PR={'acil':0,'normal':1,'düşük':2};
 var DEF_ST={capacity:1500,sterilDays:3,packCapacity:1500,shipDays:3,workdays:[1,2,3,4,5],holidays:'',useStock:false};
 
-var S={db:null,user:null,uid:null,isOwner:false,me:null,models:{},stock:{},orders:{},invoices:{},acl:{},requests:{},settings:{},loaded:{},err:null,cur:null,sel:null,invF:'open',ordF:'aktif',names:{},slow:false};
+var S={db:null,user:null,uid:null,isOwner:false,me:null,models:{},stock:{},orders:{},invoices:{},acl:{},requests:{},settings:{},loaded:{},err:null,cur:null,sel:null,invF:'open',ordF:'aktif',names:{},slow:false,inbox:[],ibErr:'',sync:''};
 var P=new Set();
 var raf=0;
 function schedule(){if(raf)return;raf=requestAnimationFrame(function(){raf=0;render()})}
@@ -320,7 +320,7 @@ function computePerms(){
   return new Set(PERMS.map(function(p){return p[0]}));
 }
 function roleOf(){return ''}
-var TABS=[['ozet','Özet','dash'],['siparis','Siparişler','ord_view'],['plan','Üretim Planı','plan_view'],['kapasite','Kapasite','plan_view'],['urun','Ürün ve Stok','prod_view'],['gelir','Gelir ve Faturalar','fin_view']];
+var TABS=[['ozet','Özet','dash'],['siparis','Siparişler','ord_view'],['plan','Üretim Planı','plan_view'],['kapasite','Kapasite','plan_view'],['urun','Ürün ve Stok','prod_view'],['gelir','Gelir ve Faturalar','fin_view'],['gelen','Gmail’den gelenler','ord_view']];
 function allowedTabs(){return TABS.filter(function(t){return t[2]==='#owner'?S.isOwner:P.has(t[2])})}
 function curTab(){var h=(location.hash||'').replace('#','');var a=allowedTabs();var f=a.filter(function(t){return t[0]===h})[0];return f?f[0]:(a[0]?a[0][0]:'')}
 
@@ -364,6 +364,8 @@ function emptyState(){
 }
 function viewOzet(){
   var plan=computePlan(),h='<div class="stack">';
+  if(S.inbox.length)h+='<section class="alerts warn"><div class="row sb"><div><h3 style="margin:0">Gmail’den gelen '+S.inbox.length+' kayıt onay bekliyor</h3><span class="small muted">Claude e-postalardan hazırladı. Kontrol edip kaydedin.</span></div><a class="btn p" href="#gelen">Gözden geçir</a></div></section>';
+  if(LK&&!(LK.data.gh&&LK.data.gh.token))h+='<section class="alerts warn"><div class="row sb"><div><h3 style="margin:0">Bulut senkron kapalı</h3><span class="small muted">Değişiklikler yalnızca bu tarayıcıda kalıyor. Diğer cihazlarda görünmesi için bir kez GitHub anahtarı girin.</span></div><button class="btn" data-act="gh-set">Kur</button></div></section>';
   h+=alertsHtml();
   if(!Object.keys(S.orders).length&&!Object.keys(S.invoices).length)h+=emptyState();
   if(P.has('ord_view')||P.has('plan_view')){
@@ -467,12 +469,64 @@ function viewGelir(){
   return h+'</tbody></table></div></div>';
 }
 
+/* ---------- Gmail'den gelenler ---------- */
+function ibNorm(t){return String(t||'').toLowerCase().replace(/[^a-z0-9ğüşıöç]+/g,'')}
+function ibFindModel(brand,name){
+  var n=ibNorm(name),b=ibNorm(brand);
+  var all=Object.keys(S.models).map(function(id){return Object.assign({id:id},S.models[id])});
+  var hit=all.filter(function(m){return ibNorm(m.name)===n&&(!b||ibNorm(m.brand)===b)})[0]||all.filter(function(m){return ibNorm(m.name)===n})[0];
+  return hit?hit.id:'';
+}
+function ibOrder(e){
+  var o=clone(e.order||{}),miss=[];
+  o.items=(o.items||[]).map(function(it){
+    var mid=ibFindModel(it.brand,it.model);if(!mid)miss.push((it.brand?it.brand+' ':'')+it.model);
+    var r={model:mid,qty:Math.round(+it.qty||0)};
+    if(it.power!=null&&it.power!=='')r.power=(+it.power).toFixed(1);
+    if(it.color)r.color=it.color;if(it.cyl)r.cyl=String(it.cyl);
+    return r});
+  o.status=o.status||'alındı';o.priority=o.priority||'normal';o.currency=o.currency||'USD';
+  return {o:o,miss:miss.filter(function(x,i,a){return a.indexOf(x)===i})};
+}
+function ibLinkOrder(inv){
+  var ref=ibNorm(inv.orderRef),cu=ibNorm(inv.customer);
+  var L=ordList().filter(function(o){return ref&&ibNorm(o.ref)===ref});
+  if(!L.length&&cu)L=ordList().filter(function(o){return ibNorm(o.customer)===cu&&!Object.keys(S.invoices).some(function(k){return S.invoices[k].orderId===o.id})});
+  return L.length===1?L[0].id:'';
+}
+function ibWarn(ib){
+  if(!ib)return '';
+  var w=(ib.warnings||[]).slice();
+  if(ib.kind==='order'){var m=ibOrder(ib).miss;if(m.length)w.unshift('Panelde bulunamayan model: '+m.join(', ')+'. İlgili satırlarda modeli kontrol edin.')}
+  return '<div class="alerts warn" style="margin-bottom:12px"><b>Gmail’den hazırlandı:</b> '+esc((ib.gmail&&ib.gmail.subject)||'')+(w.length?'<ul style="margin:6px 0 0 18px;padding:0">'+w.map(function(x){return '<li>'+esc(x)+'</li>'}).join('')+'</ul>':'')+'<div class="small muted" style="margin-top:6px">Kontrol edip Kaydet’e bastığınızda kayıt panele eklenir.</div></div>';
+}
+function ibOpen(id){
+  var e=S.inbox.filter(function(x){return x.id===id})[0];if(!e)return;
+  if(e.kind==='order'){var r=ibOrder(e);orderForm(null,r.o,e)}
+  else{var v=clone(e.invoice||{});v.paid=v.paid||0;v.orderId=v.orderId||ibLinkOrder(v);invForm(null,v,e)}
+}
+function viewGelen(){
+  var h='<div class="stack"><div class="sect-h"><div><h2>Gmail’den gelenler</h2><p>Claude, gelen kutusundaki sipariş ve fatura e-postalarından bu kayıtları hazırladı. Her birini açıp kontrol edin; Kaydet’e bastığınızda panele eklenir.</p></div></div>';
+  if(S.ibErr)h+='<div class="alerts warn">'+esc(S.ibErr)+'</div>';
+  if(!S.inbox.length)return h+'<div class="empty"><p>Onay bekleyen kayıt yok.</p></div></div>';
+  S.inbox.forEach(function(e){
+    var isO=e.kind==='order',o=e.order||{},v=e.invoice||{};
+    var title=isO?(o.customer||'—')+(o.ref?' · No '+o.ref:''):(v.customer||'—')+' · Fatura '+(v.no||'');
+    var det=isO?nf.format((o.items||[]).reduce(function(a,i){return a+(+i.qty||0)},0))+' adet · '+(o.items||[]).length+' kalem'+(o.amount?' · '+money(o.amount,o.currency):''):money(v.amount,v.currency)+' · kesim '+fmtD(v.issueDate)+' · vade '+fmtD(v.dueDate);
+    var miss=isO?ibOrder(e).miss:[];
+    h+='<section class="card"><div class="row sb"><div style="min-width:0"><span class="pill '+(isO?'accent':'ok')+'">'+(isO?'Sipariş':'Fatura')+'</span> <b>'+esc(title)+'</b><div class="sub">'+esc(det)+'</div><div class="small muted">'+esc(((e.gmail&&e.gmail.subject)||'')+(e.gmail&&e.gmail.date?' · '+fmtD(e.gmail.date.slice(0,10)):''))+'</div>'+
+      (e.summary?'<p class="small" style="margin:6px 0 0">'+esc(e.summary)+'</p>':'')+
+      ((e.warnings||[]).length||miss.length?'<ul class="small" style="margin:6px 0 0 18px;padding:0;color:var(--warn,#b54708)">'+(miss.length?'<li>Panelde bulunamayan model: '+esc(miss.join(', '))+'</li>':'')+(e.warnings||[]).map(function(w){return '<li>'+esc(w)+'</li>'}).join('')+'</ul>':'')+
+      '</div><div class="row"><button class="btn" data-act="ib-reject" data-id="'+esc(e.id)+'">Reddet</button><button class="btn p" data-act="ib-open" data-id="'+esc(e.id)+'">Gözden geçir ve kaydet</button></div></div></section>'});
+  return h+'</div>';
+}
+
 /* ---------- shell ---------- */
 function topbar(tab){
   var me=S.me||{},tabs=allowedTabs();
   return '<div class="bar"><div class="brand"><svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="8.5" fill="none" stroke="var(--accent)" stroke-width="2.2"/><circle cx="14" cy="14" r="3.2" fill="var(--accent)"/><path d="M14 5.5C14 2.5 10 1.5 7.5 3M14 22.5c0 3-4 4-6.5 2.5" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"/></svg><div><b>IOLSTAR</b><br><span>Materials and Technologies</span></div></div>'+
-    '<div class="who">'+(me.avatarUrl?'<img src="'+esc(me.avatarUrl)+'" alt="">':'')+'<button class="btn" data-act="own-pw">Şifremi değiştir</button> <button class="btn" data-act="export-vault" title="Şifreli veriyi dosya olarak indir">Yedek indir</button> <button class="btn" data-act="logout">Çıkış</button></div></div>'+
-    (tabs.length?'<nav class="tabs" aria-label="Bölümler">'+tabs.map(function(t){return '<a href="#'+t[0]+'"'+(t[0]===tab?' aria-current="page"':'')+'>'+t[1]+'</a>'}).join('')+'</nav>':'<div style="height:10px"></div>');
+    '<div class="who">'+(me.avatarUrl?'<img src="'+esc(me.avatarUrl)+'" alt="">':'')+'<button class="btn" data-act="gh-set" title="Değişiklikleri GitHub’a otomatik gönder">Bulut senkron'+(S.sync?' · '+esc(S.sync):'')+'</button> <button class="btn" data-act="own-pw">Şifremi değiştir</button> <button class="btn" data-act="export-vault" title="Şifreli veriyi dosya olarak indir">Yedek indir</button> <button class="btn" data-act="logout">Çıkış</button></div></div>'+
+    (tabs.length?'<nav class="tabs" aria-label="Bölümler">'+tabs.map(function(t){var n=t[0]==='gelen'?S.inbox.length:0;return '<a href="#'+t[0]+'"'+(t[0]===tab?' aria-current="page"':'')+'>'+t[1]+(n?' <span class="pill warn">'+n+'</span>':'')+'</a>'}).join('')+'</nav>':'<div style="height:10px"></div>');
 }
 function render(){
   P=computePerms();
@@ -495,7 +549,7 @@ function render(){
     app.innerHTML='<div class="center"><div><h2>Erişim bekleniyor</h2><p class="muted">Henüz bu panelde görüntüleme yetkiniz yok. '+(asked?'İsteğiniz panelin sahibine iletildi; yetki verildiğinde sayfa kendiliğinden açılır.':'Yetki istemek için aşağıdaki düğmeye basın.')+'</p>'+(asked?'':'<button class="btn p" data-act="request-access">Erişim iste</button>')+(S.err?'<p class="small muted">Veri okunamadı: '+esc(S.err)+'</p>':'')+'</div></div>';
     return;
   }
-  var v={ozet:viewOzet,siparis:viewSiparis,plan:viewPlan,kapasite:viewKapasite,urun:viewUrun,gelir:viewGelir}[tab]();
+  var v={ozet:viewOzet,siparis:viewSiparis,plan:viewPlan,kapasite:viewKapasite,urun:viewUrun,gelir:viewGelir,gelen:viewGelen}[tab]();
   app.innerHTML=v;
 }
 
@@ -527,12 +581,12 @@ function itemRow(it){
     '<label class="f">Adet / gram<input class="iqty" type="number" min="1" value="'+esc(it.qty||'')+'"></label>'+
     '<button type="button" class="btn sm" data-act="rm-row">Sil</button></div>';
 }
-function orderForm(id){
-  var o=id?S.orders[id]:null;
+function orderForm(id,pre,ib){
+  var o=id?S.orders[id]:(pre||null);
   if(!mList().some(function(m){return m.sellable!==false})){toast('Önce Ürün ve Stok sekmesinde model tanımlayın.',true);return}
   o=o||{status:'alındı',priority:'normal',orderDate:iso(TODAY),currency:'EUR',items:[{model:'',qty:''}]};
   var rows=(o.items||[]).map(function(it){return itemRow(it)}).join('');
-  openModal('<h2>'+(id?'Siparişi düzenle':'Yeni sipariş')+'</h2><form data-form="order" data-id="'+esc(id||'')+'"><div class="fg">'+
+  openModal('<h2>'+(id?'Siparişi düzenle':'Yeni sipariş')+'</h2>'+ibWarn(ib)+'<form data-form="order" data-id="'+esc(id||'')+'" data-inbox="'+esc(ib&&ib.id||'')+'"><div class="fg">'+
     '<label class="f">Müşteri<input name="customer" required value="'+esc(o.customer||'')+'"></label><label class="f">Ülke / şehir<input name="country" value="'+esc(o.country||'')+'"></label>'+
     '<label class="f">Müşteri sipariş no<input name="ref" placeholder="Örn: 070/2026" value="'+esc(o.ref||'')+'"></label>'+
     '<label class="f">Sipariş tarihi<input type="date" name="orderDate" value="'+esc(o.orderDate||'')+'"></label><label class="f">İstenen teslim<input type="date" name="requestedDate" value="'+esc(o.requestedDate||'')+'"></label>'+
@@ -543,10 +597,10 @@ function orderForm(id){
     '<label class="f" style="margin-top:12px">Açıklama (özel koşul)<textarea name="note" rows="3" placeholder="Örn: %5 mal fazlası gönderilecek (73 adet); sevk tek partide yapılacak">'+esc(o.note||'')+'</textarea></label>'+
     '<div class="row sb" style="margin-top:14px"><div class="row">'+(id?'<button type="button" class="btn danger" data-act="del-order" data-id="'+esc(id)+'">Siparişi sil</button>':'')+'</div><div class="row"><button type="button" class="btn" data-act="mclose">Vazgeç</button><button type="submit" class="btn p">Kaydet</button></div></div></form>');
 }
-function invForm(id){
-  var v=id?S.invoices[id]:null;v=v||{currency:curCur(),issueDate:iso(TODAY),paid:0};
+function invForm(id,pre,ib){
+  var v=id?S.invoices[id]:(pre||null);v=v||{currency:curCur(),issueDate:iso(TODAY),paid:0};
   var os=ordList().map(function(o){return [o.id,(o.customer||'—')+' · '+fmtD(o.orderDate)+' · '+nf.format(totalQty(o))+' adet']});
-  openModal('<h2>'+(id?'Faturayı düzenle':'Yeni fatura')+'</h2><form data-form="inv" data-id="'+esc(id||'')+'"><div class="fg">'+
+  openModal('<h2>'+(id?'Faturayı düzenle':'Yeni fatura')+'</h2>'+ibWarn(ib)+'<form data-form="inv" data-id="'+esc(id||'')+'" data-inbox="'+esc(ib&&ib.id||'')+'"><div class="fg">'+
     '<label class="f">Fatura no<input name="no" value="'+esc(v.no||'')+'"></label><label class="f">Müşteri<input name="customer" required value="'+esc(v.customer||'')+'"></label>'+
     '<label class="f">Bağlı sipariş<select name="orderId"><option value="">Seçilmedi</option>'+opts(os,v.orderId||'')+'</select></label>'+
     '<label class="f">Tutar<input type="number" min="0" step="any" name="amount" required value="'+esc(v.amount||'')+'"></label><label class="f">Para birimi<select name="currency">'+opts(CURS.map(function(c){return [c,c]}),v.currency)+'</select></label>'+
@@ -625,6 +679,9 @@ document.addEventListener('click',function(e){
   else if(a==='new-inv')invForm();
   else if(a==='edit-inv')invForm(id);
   else if(a==='pay-inv')payForm(id);
+  else if(a==='ib-open')ibOpen(id);
+  else if(a==='ib-reject'){if(!el.dataset.arm){el.dataset.arm='1';el.textContent='Reddetmek için tekrar basın';return}save(async function(){ibMark(id);await commit()},'Kayıt reddedildi')}
+  else if(a==='gh-set')ghForm();
   else if(a==='new-model')modelForm();
   else if(a==='edit-model')modelForm(id);
   else if(a==='edit-stock')stockForm(id);
@@ -664,10 +721,10 @@ document.addEventListener('submit',function(e){
     }).filter(function(i){return i.model&&i.qty>0});
     if(!items.length){toast('En az bir kalem, model ve adet/gram girin.',true);return}
     var d={customer:g('customer'),country:g('country'),orderDate:g('orderDate'),requestedDate:g('requestedDate'),priority:g('priority'),status:g('status'),amount:+g('amount')||0,currency:g('currency'),doneQty:+g('doneQty')||0,source:g('source'),ref:g('ref'),note:g('note'),items:items};
-    save(async function(){if(id)await S.db.doc('orders/'+id).set(d);else await S.db.collection('orders').add(d);closeModal()},'Sipariş kaydedildi')}
+    var ibo=f.dataset.inbox;save(async function(){if(ibo)ibMark(ibo);if(id)await S.db.doc('orders/'+id).set(d);else await S.db.collection('orders').add(d);closeModal()},'Sipariş kaydedildi')}
   else if(k==='inv'){
     var v={no:g('no'),customer:g('customer'),orderId:g('orderId'),amount:+g('amount')||0,currency:g('currency'),issueDate:g('issueDate'),dueDate:g('dueDate'),paid:+g('paid')||0,paidDate:g('paidDate'),source:g('source')};
-    save(async function(){if(id)await S.db.doc('invoices/'+id).set(v);else await S.db.collection('invoices').add(v);closeModal()},'Fatura kaydedildi')}
+    var ibv=f.dataset.inbox;save(async function(){if(ibv)ibMark(ibv);if(id)await S.db.doc('invoices/'+id).set(v);else await S.db.collection('invoices').add(v);closeModal()},'Fatura kaydedildi')}
   else if(k==='pay'){
     var inv=S.invoices[id];if(!inv)return;var amt=+g('amt')||0;
     save(async function(){await S.db.doc('invoices/'+id).update({paid:(+inv.paid||0)+amt,paidDate:g('date')});closeModal()},'Ödeme kaydedildi')}
@@ -708,7 +765,8 @@ async function commit(){
   var iv=crypto.getRandomValues(new Uint8Array(12));
   var ct=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},LK.key,new TextEncoder().encode(JSON.stringify(LK.data)));
   LK.vault={v:1,salt:LK.vault.salt,iter:LK.vault.iter,iv:b64(iv),ct:b64(ct),updated:new Date().toISOString()};
-  writeCache(LK.vault);LK.dirty=true;syncS();
+  if(LK.data.inbox&&LK.data.inbox.pub)LK.vault.pub=LK.data.inbox.pub;
+  writeCache(LK.vault);LK.dirty=true;if(ghCfg())S.sync='bekliyor';syncS();schedulePush();
 }
 // Giriş: şifreden anahtar türetilir ve veri çözülür. Bu tarayıcıda daha yeni kayıt varsa o kullanılır.
 async function unlock(pass){
@@ -726,7 +784,7 @@ async function unlock(pass){
       var key=await deriveKey(pass,unb64(vault.salt),vault.iter);
       var pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(vault.iv)},key,unb64(vault.ct));
       var data=JSON.parse(new TextDecoder().decode(pt));
-      LK={key:key,vault:vault,data:data,dirty:cands[i].isCache};
+      LK={key:key,vault:vault,data:data,dirty:cands[i].isCache,repoUpdated:repo.updated};
       return;
     }catch(err){}
   }
@@ -757,6 +815,82 @@ function mkDb(){
     }
   };
 }
+/* ---------- gelen kutusu (ECDH P-256 + AES-GCM) ve GitHub senkron ---------- */
+async function ensureInboxKey(){
+  var ib=LK.data.inbox=LK.data.inbox||{};ib.done=ib.done||{};
+  if(ib.priv&&ib.pub)return false;
+  var kp=await crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},true,['deriveKey']);
+  ib.priv=await crypto.subtle.exportKey('jwk',kp.privateKey);
+  ib.pub=await crypto.subtle.exportKey('jwk',kp.publicKey);
+  return true;
+}
+function ibMark(id){var ib=LK.data.inbox;ib.done[id]=new Date().toISOString();S.inbox=S.inbox.filter(function(x){return x.id!==id})}
+function ghCfg(){var g=LK&&LK.data.gh;return g&&g.token?g:null}
+function ghApi(path,opt){
+  var g=ghCfg();opt=opt||{};opt.headers=Object.assign({'Authorization':'Bearer '+g.token,'Accept':'application/vnd.github+json'},opt.headers||{});
+  return fetch('https://api.github.com/repos/'+(g.repo||'iolstarintraocularlenses/dashboard')+'/contents/'+path+(opt.method?'':'?ref='+(g.branch||'main')+'&t='+Date.now()),opt);
+}
+var utf8b64=function(t){return b64(new TextEncoder().encode(t))};
+var b64utf8=function(t){return new TextDecoder().decode(unb64(t.replace(/\s/g,'')))};
+async function loadInbox(){
+  S.ibErr='';
+  try{
+    var raw=null;
+    if(ghCfg()){var r=await ghApi('data/inbox.json');if(r.ok){raw=JSON.parse(b64utf8((await r.json()).content))}else if(r.status!==404)throw new Error('gh '+r.status)}
+    if(!raw){var r2=await fetch('data/inbox.json?t='+Date.now(),{cache:'no-store'});raw=r2.ok?await r2.json():{items:[]}}
+    var ib=LK.data.inbox,priv=await crypto.subtle.importKey('jwk',ib.priv,{name:'ECDH',namedCurve:'P-256'},false,['deriveKey']),out=[];
+    for(var i=0;i<(raw.items||[]).length;i++){
+      var it=raw.items[i];if(ib.done[it.id])continue;
+      try{
+        var epk=await crypto.subtle.importKey('jwk',it.epk,{name:'ECDH',namedCurve:'P-256'},false,[]);
+        var k=await crypto.subtle.deriveKey({name:'ECDH',public:epk},priv,{name:'AES-GCM',length:256},false,['decrypt']);
+        var pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(it.iv)},k,unb64(it.ct));
+        var e=JSON.parse(new TextDecoder().decode(pt));e.id=it.id;out.push(e);
+      }catch(err){}
+    }
+    S.inbox=out;
+  }catch(err){S.ibErr='Gmail’den gelen kayıtlar okunamadı. Sayfayı yenileyip tekrar deneyin.'}
+  schedule();
+}
+var pushT=0;
+function schedulePush(){if(!ghCfg())return;clearTimeout(pushT);pushT=setTimeout(pushVault,1500)}
+async function pushVault(){
+  if(!ghCfg()||!LK)return;
+  S.sync='gönderiliyor';schedule();
+  try{
+    var r=await ghApi('data/vault.json');if(!r.ok&&r.status!==404)throw new Error(r.status===401?'auth':'gh '+r.status);
+    var cur=r.ok?await r.json():null,remote=cur?JSON.parse(b64utf8(cur.content)):null;
+    if(remote&&remote.updated!==LK.repoUpdated&&remote.updated!==LK.vault.updated){S.sync='çakışma';schedule();toast('Başka bir cihazda daha yeni kayıt var. Çıkış yapıp tekrar girin; değişikliğiniz bu tarayıcıda duruyor.',true);return}
+    var body={message:'Panel: veri güncellendi',content:utf8b64(JSON.stringify(LK.vault,null,2)+'\n'),branch:ghCfg().branch||'main'};if(cur)body.sha=cur.sha;
+    var p=await ghApi('data/vault.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!p.ok)throw new Error(p.status===401||p.status===403?'auth':'gh '+p.status);
+    LK.repoUpdated=LK.vault.updated;LK.dirty=false;S.sync='güncel';schedule();
+  }catch(err){S.sync='hata';schedule();toast(err.message==='auth'?'GitHub anahtarı geçersiz ya da yetkisi yok. Bulut senkron ayarını kontrol edin.':'Buluta gönderilemedi; değişiklik bu tarayıcıda duruyor.',true)}
+}
+async function afterUnlock(){
+  if(await ensureInboxKey())await commit();
+  S.sync=ghCfg()?(LK.dirty?'bekliyor':'güncel'):'';
+  if(LK.dirty)schedulePush();
+  loadInbox();
+}
+function ghForm(){
+  var g=(LK&&LK.data.gh)||{};
+  openModal('<h2>Bulut senkron (GitHub)</h2><p class="muted" style="margin:0 0 10px">Açıkken panelde yaptığınız her değişiklik şifreli olarak GitHub’a otomatik gönderilir; diğer cihazlarda da görünür. Anahtar, şifreli verinin içinde saklanır.</p>'+
+    '<ol class="small" style="margin:0 0 12px 18px;padding:0"><li>github.com → Settings → Developer settings → Personal access tokens → <b>Fine-grained tokens</b> → Generate new token.</li><li>Repository access: <b>Only select repositories</b> → <b>dashboard</b>.</li><li>Permissions → Repository → <b>Contents: Read and write</b>.</li><li>Oluşan anahtarı aşağıya yapıştırın.</li></ol>'+
+    '<form data-form="gh"><div class="fg"><label class="f">GitHub anahtarı (token)<input name="token" type="password" autocomplete="off" placeholder="'+(g.token?'Kayıtlı · değiştirmek için yenisini yapıştırın':'github_pat_…')+'"></label><label class="f">Repo<input name="repo" value="'+esc(g.repo||'iolstarintraocularlenses/dashboard')+'"></label></div>'+
+    '<div class="row sb" style="margin-top:14px"><div>'+(g.token?'<button type="button" class="btn danger" data-act="gh-off">Senkronu kapat</button>':'')+'</div><div class="row"><button type="button" class="btn" data-act="mclose">Vazgeç</button><button type="submit" class="btn p">Kaydet</button></div></div></form>');
+}
+document.addEventListener('submit',async function(e){
+  var f=e.target.closest&&e.target.closest('form[data-form="gh"]');if(!f||!LK)return;e.preventDefault();
+  var fd=new FormData(f),t=(fd.get('token')||'').toString().trim(),repo=(fd.get('repo')||'').toString().trim()||'iolstarintraocularlenses/dashboard';
+  var g=LK.data.gh||{};if(t)g.token=t;g.repo=repo;g.branch='main';
+  if(!g.token){toast('Anahtar girin.',true);return}
+  LK.data.gh=g;await commit();closeModal();toast('Bulut senkron açıldı.');
+});
+document.addEventListener('click',async function(e){
+  var el=e.target.closest('[data-act="gh-off"]');if(!el||!LK)return;
+  delete LK.data.gh;await commit();S.sync='';closeModal();toast('Bulut senkron kapatıldı.');
+});
 function loginHTML(){
   return '<div class="center"><form id="login-form" class="card" style="width:100%;max-width:360px;text-align:left">'+
     '<h2 style="margin:0 0 4px">Giriş</h2><p class="muted" style="margin:0 0 14px">Panel şifrenizi girin.</p>'+
@@ -765,7 +899,7 @@ function loginHTML(){
     '<button class="btn p" type="submit" style="width:100%">Giriş yap</button></form></div>';
 }
 function showLogin(msg){
-  LK=null;S.db=null;S.isOwner=false;S.me=null;
+  LK=null;S.db=null;S.isOwner=false;S.me=null;S.inbox=[];S.sync='';
   render();
   var e=$('#login-err');if(e&&msg)e.textContent=msg;
 }
@@ -774,7 +908,7 @@ document.addEventListener('submit',async function(e){
   var b=f.querySelector('button');if(b)b.disabled=true;
   try{
     await unlock(f.elements.pass.value);
-    S.db=mkDb();syncS();render();
+    S.db=mkDb();await afterUnlock();syncS();render();
   }catch(err){
     if(b)b.disabled=false;
     showLogin(err&&err.message==='vault'?'Veri dosyası okunamadı.':'Şifre hatalı.');
